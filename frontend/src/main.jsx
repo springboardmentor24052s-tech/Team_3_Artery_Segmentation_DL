@@ -1,21 +1,14 @@
-import { StrictMode, Component } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.jsx'
 
-class ErrorBoundary extends Component {
-  state = { error: null }
-  static getDerivedStateFromError(error) { return { error } }
-  render() {
-    if (this.state.error) return <pre style={{ padding: 20, color: 'red' }}>{this.state.error.message}</pre>
-    return this.props.children
-  }
-}
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import App from "./App";
+import "./index.css";
 
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
-    <ErrorBoundary>
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <React.StrictMode>
+    <BrowserRouter>
       <App />
-    </ErrorBoundary>
-  </StrictMode>,
-)
+    </BrowserRouter>
+  </React.StrictMode>
+);

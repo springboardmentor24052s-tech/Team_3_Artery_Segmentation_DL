@@ -1,28 +1,11 @@
 
-# Python
-__pycache__/
-*.py[cod]
-*.pyd
-
-# Virtual environment
-.venv/
+# Large Dataset & Virtual Environments
+backend/dataset/
+backend/venv/
 venv/
-
-# Environment secrets
+__pycache__/
+*.pyc
 .env
-.env.*
-
-# Allow an example configuration file
-!.env.example
-
-# Testing and coverage
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Editors
-.vscode/
-
-# Logs
-*.log
-
+frontend/node_modules/
+frontend/dist/
+.DS_Store
