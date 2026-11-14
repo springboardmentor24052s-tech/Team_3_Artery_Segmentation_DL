@@ -1,186 +1,333 @@
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
+
+/* =========================================
+   ARTERY AI - STENOSIS ANALYSIS UI
+   Task 8: Vessel Width Visualization
+========================================= */
+
+.stenosis-visualization {
+  --stenosis-bg: #0b1220;
+  --stenosis-card: #111c2e;
+  --stenosis-card-light: #17243a;
+  --stenosis-border: #263750;
+  --stenosis-text: #e7eef8;
+  --stenosis-muted: #91a2b9;
+  --stenosis-accent: #22b8a7;
+  --stenosis-accent-hover: #159b8d;
+
+  width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 30px;
+  color: var(--stenosis-text);
+  background: var(--stenosis-bg);
+  border-radius: 12px;
+  font-family: inherit;
+}
+
+.stenosis-visualization * {
+  box-sizing: border-box;
+}
+
+.stenosis-heading {
+  margin-bottom: 22px;
+}
+
+.stenosis-heading .eyebrow {
+  color: #65a9ff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+}
+
+.stenosis-heading h2 {
+  color: #f1f6ff;
+  font-size: 27px;
+  margin: 10px 0;
+  font-weight: 750;
+}
+
+.stenosis-heading p {
+  color: var(--stenosis-muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.stenosis-notice {
+  padding: 14px 17px;
   margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+  border: 1px solid #72572c;
+  border-radius: 9px;
+  background: #302719;
+  color: #f3ca83;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.hero {
-  position: relative;
+/* Upload and reference cards */
 
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
+.stenosis-model-card {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--stenosis-border);
+  border-radius: 12px;
+  background: var(--stenosis-card);
+  color: var(--stenosis-text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
-#center {
+.stenosis-model-card > h3 {
+  margin: 0 0 18px;
+  color: #edf4ff;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.stenosis-upload-area {
+  min-height: 145px;
+  padding: 24px;
+  border: 1.5px dashed #3d6482;
+  border-radius: 10px;
+  background: #0d1929;
+  color: var(--stenosis-text);
   display: flex;
   flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
+  justify-content: center;
+  align-items: center;
+  gap: 9px;
+  text-align: center;
+  cursor: pointer;
+  transition: 0.2s ease;
 }
 
-#next-steps {
-  display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
+.stenosis-upload-area:hover {
+  border-color: var(--stenosis-accent);
+  background: #112638;
 }
 
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+.stenosis-upload-area svg {
+  color: var(--stenosis-accent);
 }
 
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
+.stenosis-upload-area strong {
+  font-size: 14px;
+  color: #edf4ff;
+}
+
+.stenosis-upload-area span {
+  font-size: 12px;
+  color: var(--stenosis-muted);
+}
+
+.stenosis-model-card .details-analyze-button {
+  min-height: 42px;
+  padding: 10px 17px;
+  margin-top: 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--stenosis-accent);
+  color: #06221f;
+  font-size: 13px;
+  font-weight: 750;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
 }
 
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
+.stenosis-model-card .details-analyze-button:hover:not(:disabled) {
+  background: var(--stenosis-accent-hover);
+  color: white;
+  transform: translateY(-1px);
 }
 
-.ticks {
-  position: relative;
+.stenosis-model-card .details-analyze-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Section heading */
+
+.stenosis-visualization .section-heading {
+  margin: 32px 0 17px;
+}
+
+.stenosis-visualization .section-heading h2 {
+  margin: 0 0 6px;
+  color: #edf4ff;
+  font-size: 20px;
+}
+
+.stenosis-visualization .section-heading p {
+  margin: 0;
+  color: var(--stenosis-muted);
+  font-size: 13px;
+}
+
+/* Reference comparison */
+
+.stenosis-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.stenosis-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stenosis-image-box {
+  min-width: 0;
+  margin-top: 15px;
+  padding: 12px;
+  border: 1px solid var(--stenosis-border);
+  border-radius: 9px;
+  background: #0b1422;
+}
+
+.stenosis-image-box h4 {
+  margin: 0 0 10px;
+  color: #cbd8e9;
+  font-size: 12px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.stenosis-image-box img {
+  display: block;
   width: 100%;
+  height: 210px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #02060c;
+}
 
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
+.stenosis-image-box p {
+  color: var(--stenosis-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
+/* Analysis results */
+
+.stenosis-width-results {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--stenosis-border);
+}
+
+.stenosis-width-results > h4 {
+  color: #edf4ff;
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+
+.stenosis-width-results .stenosis-image-box {
+  margin-top: 12px;
+}
+
+.stenosis-width-results .stenosis-image-box img {
+  height: 260px;
+}
+
+.stenosis-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 15px;
+}
+
+.stenosis-metrics > div {
+  padding: 15px;
+  border: 1px solid var(--stenosis-border);
+  border-radius: 9px;
+  background: var(--stenosis-card-light);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stenosis-metrics span {
+  color: var(--stenosis-muted);
+  font-size: 12px;
+}
+
+.stenosis-metrics strong {
+  color: #54d7c5;
+  font-size: 21px;
+  font-weight: 750;
+}
+
+.stenosis-result-note {
+  padding: 12px 14px;
+  margin-top: 14px;
+  border-radius: 8px;
+  background: #142b31;
+  color: #8fe0d3;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Messages */
+
+.stenosis-visualization .details-message {
+  padding: 12px 15px;
+  margin: 15px 0;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.stenosis-visualization .details-message.error {
+  color: #ffaaaa;
+  background: #351c25;
+  border: 1px solid #733444;
+}
+
+.stenosis-visualization .details-message.success {
+  color: #8fe0c0;
+  background: #143127;
+  border: 1px solid #28634c;
+}
+
+/* Responsive layout */
+
+@media (max-width: 1000px) {
+  .stenosis-model-grid {
+    grid-template-columns: 1fr;
   }
 }
 
+@media (max-width: 600px) {
+  .stenosis-visualization {
+    padding: 17px;
+  }
 
+  .stenosis-heading h2 {
+    font-size: 22px;
+  }
+
+  .stenosis-model-card {
+    padding: 15px;
+  }
+
+  .stenosis-image-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stenosis-image-box img {
+    height: 190px;
+  }
+
+  .stenosis-metrics {
+    grid-template-columns: 1fr;
+  }
+}
