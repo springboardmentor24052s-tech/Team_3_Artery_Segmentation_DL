@@ -1,0 +1,696 @@
+
+import json
+import random
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+
+from scipy import ndimage
+from torch.utils.data import Dataset, DataLoader
+
+from stenosis_detection.dataset import StenosisDataset
+from stenosis_detection.model import ResidualUNet
+
+
+# ==================================================
+# SETTINGS
+# ==================================================
+
+CHECKPOINT_PATH = Path(
+    "stenosis_detection/checkpoints/"
+    "resunet_hardnegative_best.pt"
+)
+
+CANDIDATES_PATH = Path(
+    "stenosis_detection/hard_negative_candidates.json"
+)
+
+OUTPUT_PATH = Path(
+    "stenosis_detection/checkpoints/"
+    "resunet_component_aware_best.pt"
+)
+
+PATCH_SIZE = 256
+BATCH_SIZE = 2
+EPOCHS = 8
+
+LEARNING_RATE = 0.00001
+EARLY_STOPPING_PATIENCE = 4
+
+HARD_NEGATIVE_WEIGHT = 0.5
+VALIDATION_THRESHOLD = 0.80
+
+SMALL_LIMIT = 100
+MEDIUM_LIMIT = 500
+
+MEDIUM_SAMPLING_PROBABILITY = 0.20
+
+DEVICE = torch.device("cpu")
+
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+
+torch.set_num_threads(4)
+
+
+# ==================================================
+# SAFETY CHECKS
+# ==================================================
+
+if OUTPUT_PATH.exists():
+    raise FileExistsError(
+        f"\nOutput checkpoint already exists:\n{OUTPUT_PATH}\n"
+        "Rename or back up the existing file before running again."
+    )
+
+if not CHECKPOINT_PATH.exists():
+    raise FileNotFoundError(CHECKPOINT_PATH)
+
+if not CANDIDATES_PATH.exists():
+    raise FileNotFoundError(CANDIDATES_PATH)
+
+
+# ==================================================
+# COMPONENT-AWARE PATCH DATASET
+# ==================================================
+
+class ComponentAwarePatchDataset(Dataset):
+
+    def __init__(self, base_dataset, candidates):
+
+        self.base = base_dataset
+        self.candidates = candidates
+
+        self.medium_components = []
+        self.large_components = []
+
+        self.small_component_count = 0
+
+        print("\nAnalysing training components...")
+
+        # Precompute connected components once.
+        # This avoids repeating component analysis
+        # during every training batch.
+
+        for index in range(len(self.base)):
+
+            _, mask = self.base[index]
+
+            mask_array = mask[0].numpy() > 0.5
+
+            labels, number_of_components = ndimage.label(
+                mask_array
+            )
+
+            if number_of_components == 0:
+                continue
+
+            sizes = np.bincount(labels.ravel())[1:]
+
+            for component_id, size in enumerate(
+                sizes, start=1
+            ):
+
+                if size < SMALL_LIMIT:
+
+                    self.small_component_count += 1
+
+                elif size < MEDIUM_LIMIT:
+
+                    coordinates = np.argwhere(
+                        labels == component_id
+                    )
+
+                    self.medium_components.append(
+                        (index, coordinates)
+                    )
+
+                else:
+
+                    coordinates = np.argwhere(
+                        labels == component_id
+                    )
+
+                    self.large_components.append(
+                        (index, coordinates)
+                    )
+
+            if (index + 1) % 200 == 0:
+
+                print(
+                    f"Analysed {index + 1}/"
+                    f"{len(self.base)} images"
+                )
+
+        print("\nCOMPONENT SAMPLING SUMMARY")
+        print("-" * 45)
+
+        print(
+            "Small components (not oversampled):",
+            self.small_component_count
+        )
+
+        print(
+            "Medium components:",
+            len(self.medium_components)
+        )
+
+        print(
+            "Large components:",
+            len(self.large_components)
+        )
+
+        if not self.medium_components:
+            raise RuntimeError(
+                "No medium components found."
+            )
+
+        if not self.large_components:
+            raise RuntimeError(
+                "No large components found."
+            )
+
+    def __len__(self):
+
+        return len(self.base)
+
+    def crop(self, image, mask, x, y):
+
+        image_patch = image[
+            :,
+            y:y + PATCH_SIZE,
+            x:x + PATCH_SIZE
+        ]
+
+        mask_patch = mask[
+            :,
+            y:y + PATCH_SIZE,
+            x:x + PATCH_SIZE
+        ]
+
+        return image_patch, mask_patch
+
+    def augment(self, image, mask):
+
+        if random.random() < 0.5:
+
+            image = torch.flip(image, [-1])
+            mask = torch.flip(mask, [-1])
+
+        if random.random() < 0.5:
+
+            image = torch.flip(image, [-2])
+            mask = torch.flip(mask, [-2])
+
+        rotations = random.randint(0, 3)
+
+        if rotations:
+
+            image = torch.rot90(
+                image, rotations, [-2, -1]
+            )
+
+            mask = torch.rot90(
+                mask, rotations, [-2, -1]
+            )
+
+        return image.contiguous(), mask.contiguous()
+
+    # ----------------------------------------------
+    # COMPONENT-AWARE POSITIVE SAMPLING
+    # ----------------------------------------------
+
+    def positive_patch(self):
+
+        if random.random() < MEDIUM_SAMPLING_PROBABILITY:
+
+            component_group = self.medium_components
+
+        else:
+
+            component_group = self.large_components
+
+        index, coordinates = random.choice(
+            component_group
+        )
+
+        # Select a random pixel from the chosen component.
+
+        selected = coordinates[
+            random.randrange(len(coordinates))
+        ]
+
+        cy = int(selected[0])
+        cx = int(selected[1])
+
+        image, mask = self.base[index]
+
+        x = max(
+            0,
+            min(cx - PATCH_SIZE // 2, 512 - PATCH_SIZE)
+        )
+
+        y = max(
+            0,
+            min(cy - PATCH_SIZE // 2, 512 - PATCH_SIZE)
+        )
+
+        return self.crop(image, mask, x, y), 1.0
+
+    # ----------------------------------------------
+    # HARD-NEGATIVE SAMPLING
+    # ----------------------------------------------
+
+    def hard_negative_patch(self):
+
+        candidate = random.choice(self.candidates)
+
+        index = candidate["image_index"]
+
+        image, mask = self.base[index]
+
+        patch = self.crop(
+            image,
+            mask,
+            candidate["x"],
+            candidate["y"]
+        )
+
+        return patch, HARD_NEGATIVE_WEIGHT
+
+    # ----------------------------------------------
+    # RANDOM-NEGATIVE SAMPLING
+    # ----------------------------------------------
+
+    def random_negative_patch(self):
+
+        for _ in range(80):
+
+            index = random.randrange(len(self.base))
+
+            image, mask = self.base[index]
+
+            x = random.randrange(
+                512 - PATCH_SIZE + 1
+            )
+
+            y = random.randrange(
+                512 - PATCH_SIZE + 1
+            )
+
+            patch = self.crop(
+                image, mask, x, y
+            )
+
+            if torch.count_nonzero(patch[1]).item() == 0:
+
+                return patch, 1.0
+
+        return self.hard_negative_patch()
+
+    # ----------------------------------------------
+    # PATCH SELECTION
+    # ----------------------------------------------
+
+    def __getitem__(self, index):
+
+        choice = random.random()
+
+        if choice < 0.50:
+
+            (image, mask), weight = (
+                self.positive_patch()
+            )
+
+        elif choice < 0.75:
+
+            (image, mask), weight = (
+                self.hard_negative_patch()
+            )
+
+        else:
+
+            (image, mask), weight = (
+                self.random_negative_patch()
+            )
+
+        image, mask = self.augment(image, mask)
+
+        return (
+            image,
+            mask,
+            torch.tensor(weight, dtype=torch.float32)
+        )
+
+
+# ==================================================
+# LOSS
+# ==================================================
+
+def calculate_loss(logits, targets, weights):
+
+    bce = nn.functional.binary_cross_entropy_with_logits(
+        logits,
+        targets,
+        reduction="none"
+    )
+
+    bce = bce.mean(dim=(1, 2, 3))
+
+    probabilities = torch.sigmoid(logits)
+
+    intersection = (
+        probabilities * targets
+    ).sum(dim=(1, 2, 3))
+
+    denominator = (
+        probabilities.sum(dim=(1, 2, 3))
+        + targets.sum(dim=(1, 2, 3))
+    )
+
+    dice = (
+        2.0 * intersection + 1e-6
+    ) / (
+        denominator + 1e-6
+    )
+
+    dice_loss = 1.0 - dice
+
+    sample_loss = 0.5 * bce + 0.5 * dice_loss
+
+    return (sample_loss * weights).mean()
+
+
+# ==================================================
+# VALIDATION
+# ==================================================
+
+def evaluate(model, dataset):
+
+    model.eval()
+
+    soft_dices = []
+    hard_dices = []
+    ious = []
+
+    with torch.no_grad():
+
+        for index in range(len(dataset)):
+
+            image, mask = dataset[index]
+
+            image = image.unsqueeze(0).to(DEVICE)
+            mask = mask.to(DEVICE)
+
+            logits = model(image)
+
+            probabilities = torch.sigmoid(
+                logits
+            )[0, 0]
+
+            prediction = (
+                probabilities >= VALIDATION_THRESHOLD
+            ).float()
+
+            intersection_soft = (
+                probabilities * mask[0]
+            ).sum()
+
+            soft_dice = (
+                2 * intersection_soft + 1e-6
+            ) / (
+                probabilities.sum()
+                + mask.sum()
+                + 1e-6
+            )
+
+            intersection = (
+                prediction * mask[0]
+            ).sum()
+
+            union = (
+                prediction + mask[0]
+            ).clamp(0, 1).sum()
+
+            hard_dice = (
+                2 * intersection + 1e-6
+            ) / (
+                prediction.sum()
+                + mask.sum()
+                + 1e-6
+            )
+
+            iou = (
+                intersection + 1e-6
+            ) / (
+                union + 1e-6
+            )
+
+            soft_dices.append(soft_dice.item())
+            hard_dices.append(hard_dice.item())
+            ious.append(iou.item())
+
+    return (
+        sum(soft_dices) / len(soft_dices),
+        sum(hard_dices) / len(hard_dices),
+        sum(ious) / len(ious)
+    )
+
+
+# ==================================================
+# LOAD CHECKPOINT
+# ==================================================
+
+print("=" * 60)
+print("COMPONENT-AWARE FINE-TUNING")
+print("=" * 60)
+
+print("\nLoading hard-negative best checkpoint...")
+
+checkpoint = torch.load(
+    CHECKPOINT_PATH,
+    map_location=DEVICE,
+    weights_only=False
+)
+
+model = ResidualUNet(
+    in_channels=1,
+    out_channels=1
+).to(DEVICE)
+
+model.load_state_dict(
+    checkpoint["model_state_dict"]
+)
+
+print("Starting from epoch:", checkpoint["epoch"])
+
+print(
+    "Previous best validation Dice:",
+    checkpoint["best_val_soft_dice"]
+)
+
+
+# ==================================================
+# LOAD DATA
+# ==================================================
+
+print("\nLoading training data...")
+
+train_base = StenosisDataset("train")
+val_dataset = StenosisDataset("val")
+
+with open(CANDIDATES_PATH, "r") as file:
+
+    candidates = json.load(file)
+
+train_dataset = ComponentAwarePatchDataset(
+    train_base,
+    candidates
+)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    num_workers=0
+)
+
+print("\nDATASET SUMMARY")
+print("-" * 45)
+
+print("Training images:", len(train_base))
+print("Validation images:", len(val_dataset))
+print("Hard-negative candidates:", len(candidates))
+print("Training patches per epoch:", len(train_dataset))
+
+print("Medium positive sampling: 20%")
+print("Large positive sampling: 80%")
+
+
+# ==================================================
+# OPTIMIZER
+# ==================================================
+
+optimizer = torch.optim.Adam(
+    model.parameters(),
+    lr=LEARNING_RATE
+)
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode="max",
+    factor=0.5,
+    patience=2
+)
+
+
+# ==================================================
+# TRAINING
+# ==================================================
+
+best_dice = -1.0
+epochs_without_improvement = 0
+
+for epoch in range(1, EPOCHS + 1):
+
+    model.train()
+
+    total_loss = 0.0
+
+    print("\n" + "=" * 60)
+    print(f"EPOCH {epoch}/{EPOCHS}")
+    print("=" * 60)
+
+    for batch_index, (images, masks, weights) in enumerate(
+        train_loader
+    ):
+
+        images = images.to(DEVICE)
+        masks = masks.to(DEVICE)
+        weights = weights.to(DEVICE)
+
+        optimizer.zero_grad()
+
+        logits = model(images)
+
+        loss = calculate_loss(
+            logits,
+            masks,
+            weights
+        )
+
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(
+            model.parameters(),
+            max_norm=1.0
+        )
+
+        optimizer.step()
+
+        total_loss += loss.item()
+
+        if (batch_index + 1) % 100 == 0:
+
+            print(
+                f"Batch {batch_index + 1}/"
+                f"{len(train_loader)} | "
+                f"Loss: {loss.item():.5f}"
+            )
+
+    average_loss = (
+        total_loss / len(train_loader)
+    )
+
+    print(
+        "\nTraining loss:",
+        round(average_loss, 6)
+    )
+
+    print("Evaluating validation dataset...")
+
+    soft_dice, hard_dice, iou = evaluate(
+        model,
+        val_dataset
+    )
+
+    scheduler.step(soft_dice)
+
+    current_lr = optimizer.param_groups[0]["lr"]
+
+    print("\nVALIDATION RESULTS")
+    print("-" * 35)
+
+    print("Soft Dice:", round(soft_dice, 6))
+
+    print(
+        f"Hard Dice (threshold {VALIDATION_THRESHOLD}):",
+        round(hard_dice, 6)
+    )
+
+    print("IoU:", round(iou, 6))
+    print("Learning rate:", current_lr)
+
+    # ----------------------------------------------
+    # SAVE BEST CHECKPOINT
+    # ----------------------------------------------
+
+    if soft_dice > best_dice:
+
+        best_dice = soft_dice
+
+        epochs_without_improvement = 0
+
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "scheduler_state_dict": scheduler.state_dict(),
+                "best_val_soft_dice": best_dice,
+                "val_hard_dice": hard_dice,
+                "val_iou": iou,
+                "validation_threshold": VALIDATION_THRESHOLD,
+                "source_checkpoint": str(CHECKPOINT_PATH),
+                "training_method": "component_aware_positive_sampling"
+            },
+            OUTPUT_PATH
+        )
+
+        print("\nBEST CHECKPOINT SAVED!")
+
+    else:
+
+        epochs_without_improvement += 1
+
+        print(
+            "No improvement:",
+            epochs_without_improvement,
+            "/",
+            EARLY_STOPPING_PATIENCE
+        )
+
+    if (
+        epochs_without_improvement
+        >= EARLY_STOPPING_PATIENCE
+    ):
+
+        print("\nEarly stopping triggered.")
+        break
+
+
+# ==================================================
+# FINAL SUMMARY
+# ==================================================
+
+print("\n" + "=" * 60)
+print("COMPONENT-AWARE TRAINING COMPLETED")
+print("=" * 60)
+
+print("Best validation soft Dice:", best_dice)
+print("Checkpoint saved at:", OUTPUT_PATH)
+
+print("Original checkpoints remain untouched.")
