@@ -1,3 +1,8 @@
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from app.routers import auth, patients, cases
 
 from app.preprocessing import preprocess_image
 from app.stenosis_inference import predict_stenosis
@@ -19,6 +24,10 @@ app = FastAPI(
     description="Image upload, preprocessing and stenosis analysis",
     version="0.2.0",
 )
+
+app.include_router(auth.router)
+app.include_router(patients.router)
+app.include_router(cases.router)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
