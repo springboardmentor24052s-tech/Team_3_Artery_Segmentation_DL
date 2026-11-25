@@ -26,3 +26,21 @@ htmlcov/
 # Logs
 *.log
 
+notepad .gitignore
+# Segmentation datasets
+segmentation/data/
+
+# Generated model outputs and predictions
+segmentation/outputs/
+
+# Python cache
+segmentation/**/__pycache__/
+
+# Temporary files
+*.tmp
+*.bak
+# Trained PyTorch model checkpoints
+segmentation/models/
+
+# Local authentication backup
+app/routers/auth_backup.py
