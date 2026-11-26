@@ -2,22 +2,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.routers import auth, patients, cases
-
-from app.preprocessing import preprocess_image
-from app.stenosis_inference import predict_stenosis
-
+import io
 from pathlib import Path
 from uuid import uuid4
-import io
 
 import numpy as np
 import pydicom
 from PIL import Image, UnidentifiedImageError
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from pydicom.errors import InvalidDicomError
-from app.stenosis_classification import analyze_stenosis
+
+from app.routers import auth, patients, cases
+from app.preprocessing import preprocess_image
+from app.stenosis_inference import predict_stenosis
 from app.stenosis_measurement import measure_stenosis
+
 
 app = FastAPI(
     title="Artery Image API",
@@ -25,9 +25,23 @@ app = FastAPI(
     version="0.2.0",
 )
 
+# Allow the React development server to communicate with FastAPI.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register application routers.
 app.include_router(auth.router)
 app.include_router(patients.router)
 app.include_router(cases.router)
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -56,10 +70,16 @@ async def upload_image(file: UploadFile = File(...)):
     await file.close()
 
     if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
+        raise HTTPException(
+            status_code=400,
+            detail="Empty file",
+        )
 
     if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File exceeds 20 MB")
+        raise HTTPException(
+            status_code=413,
+            detail="File exceeds 20 MB",
+        )
 
     try:
         if extension == ".dcm":
@@ -76,6 +96,7 @@ async def upload_image(file: UploadFile = File(...)):
         else:
             with Image.open(io.BytesIO(content)) as image:
                 actual_format = image.format
+
                 expected_formats = {
                     ".png": "PNG",
                     ".jpg": "JPEG",
@@ -142,23 +163,23 @@ def preprocess_uploaded_image(image_id: str):
 @app.post("/images/{image_id}/predict")
 def predict_uploaded_image(image_id: str):
     try:
-        # 1. Detect and localize stenosis regions
+        # 1. Detect and localize stenosis regions.
         result = predict_stenosis(image_id)
 
-        # 2. Load normalized angiogram
+        # 2. Load the normalized angiogram.
         image_path = Path("processed") / f"{image_id}_normalized.npy"
         image = np.load(image_path).astype(np.float32)
 
-        # 3. Load predicted stenosis mask
+        # 3. Load the predicted stenosis mask.
         mask_path = Path(result["predicted_mask_path"])
         mask = np.array(
             Image.open(mask_path).convert("L")
         )
 
-        # 4. Estimate narrowing and classify severity
+        # 4. Estimate narrowing and classify severity.
         measurement_result = measure_stenosis(image, mask)
 
-        # 5. Attach measurements to corresponding regions
+        # 5. Attach measurements to corresponding regions.
         measurements = {
             item["region_id"]: item
             for item in measurement_result["measurements"]
@@ -169,16 +190,18 @@ def predict_uploaded_image(image_id: str):
                 region["region_id"],
                 {
                     "measurement_available": False,
-                    "severity": "Unavailable"
-                }
+                    "severity": "Unavailable",
+                },
             )
 
         return {
             "message": "Stenosis analysis completed successfully",
             **result,
             "measurement_method": measurement_result["measurement_method"],
-            "successful_measurements": measurement_result["successful_measurements"],
-            "measurement_note": measurement_result["note"]
+            "successful_measurements": measurement_result[
+                "successful_measurements"
+            ],
+            "measurement_note": measurement_result["note"],
         }
 
     except FileNotFoundError as exc:
