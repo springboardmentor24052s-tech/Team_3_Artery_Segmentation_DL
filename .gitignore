@@ -44,3 +44,10 @@ segmentation/models/
 
 # Local authentication backup
 app/routers/auth_backup.py
+.DS_Store
+**/.DS_Store
+.env
+.venv/
+processed/
+uploads/
+*.db
