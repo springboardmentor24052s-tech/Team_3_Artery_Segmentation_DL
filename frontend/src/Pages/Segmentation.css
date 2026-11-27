@@ -1,0 +1,205 @@
+.segmentation-workspace {
+  color: #f8fafc;
+}
+
+.segmentation-control-card,
+.segmentation-results-card {
+  margin-bottom: 20px;
+  padding: 22px;
+  border: 1px solid #1e293b;
+  border-radius: 16px;
+  background: #0f172a;
+}
+
+.segmentation-card-heading,
+.segmentation-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.segmentation-card-heading {
+  justify-content: flex-start;
+  color: #38bdf8;
+}
+
+.segmentation-card-heading h2,
+.segmentation-results-heading h2 {
+  margin: 0;
+  color: #f8fafc;
+  font-size: 17px;
+}
+
+.segmentation-card-heading p,
+.segmentation-results-heading p {
+  margin: 5px 0 0;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.segmentation-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.segmentation-controls label,
+.segmentation-results-heading label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.segmentation-controls select,
+.segmentation-controls input,
+.segmentation-results-heading select {
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0b1220;
+  color: #e2e8f0;
+  font: inherit;
+}
+
+.segmentation-file-control input {
+  padding: 6px;
+}
+
+.segmentation-controls .overview-primary-btn {
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.segmentation-controls .overview-primary-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.segmentation-empty {
+  margin: 16px 0 0;
+  color: #fcd34d;
+  font-size: 13px;
+}
+
+.segmentation-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+
+.segmentation-metadata span {
+  padding: 7px 10px;
+  border: 1px solid #263449;
+  border-radius: 7px;
+  background: #0b1220;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.segmentation-image-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.segmentation-image-grid figure {
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  background: #0b1220;
+}
+
+.segmentation-image-grid figcaption {
+  margin-bottom: 10px;
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.segmentation-image-grid img,
+.segmentation-image-missing {
+  display: block;
+  width: 100%;
+  min-height: 170px;
+  max-height: 480px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #060b14;
+}
+
+.segmentation-image-missing,
+.segmentation-no-results {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.segmentation-no-results {
+  min-height: 170px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.segmentation-no-results p {
+  margin: 0;
+}
+
+.segmentation-disclaimer {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.segmentation-spinner {
+  animation: segmentation-spin 1s linear infinite;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes segmentation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .segmentation-results-heading,
+  .segmentation-controls {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .segmentation-results-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .segmentation-image-grid {
+    grid-template-columns: 1fr;
+  }
+}

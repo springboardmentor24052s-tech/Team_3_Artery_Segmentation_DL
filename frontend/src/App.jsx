@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 
 import AppLayout from './layouts/AppLayout'
@@ -10,9 +11,17 @@ import ModelAnalytics from './Pages/ModelAnalytics'
 import Reports from './Pages/Reports'
 
 function ProtectedLayout() {
-  const user = localStorage.getItem('demoUser')
+  const [authenticated, setAuthenticated] = useState(
+    Boolean(localStorage.getItem('access_token'))
+  )
 
-  if (!user) {
+  useEffect(() => {
+    const expireSession = () => setAuthenticated(false)
+    window.addEventListener('auth-expired', expireSession)
+    return () => window.removeEventListener('auth-expired', expireSession)
+  }, [])
+
+  if (!authenticated) {
     return <Navigate to="/login" replace />
   }
 

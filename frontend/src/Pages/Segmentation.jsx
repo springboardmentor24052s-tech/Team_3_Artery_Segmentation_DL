@@ -1,216 +1,345 @@
-import { useState } from 'react'
-import {
-  Activity, UploadCloud, Sparkles, Layers,
-  CheckCircle2, Info, Trash2, FileImage
-} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Activity, Image as ImageIcon, LoaderCircle, UploadCloud } from 'lucide-react'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+import { apiGet, apiPost, fetchImageUrl } from '../Services/api'
+import './Segmentation.css'
+
+const SEGMENT_LABEL = 'baseline_unet_artery_mask'
+const ARTIFACT_TYPES = [
+  'artery_input_preview',
+  'artery_segmentation_mask',
+  'artery_probability_map',
+  'artery_segmentation_overlay'
+]
 
 export default function Segmentation() {
+  const [cases, setCases] = useState([])
+  const [caseId, setCaseId] = useState('')
+  const [images, setImages] = useState([])
+  const [existingImageId, setExistingImageId] = useState('')
   const [selectedFile, setSelectedFile] = useState(null)
-  const [previewUrl, setPreviewUrl] = useState(null)
-  const [modelType, setModelType] = useState('attention')
-  const [loading, setLoading] = useState(false)
+  const [runs, setRuns] = useState([])
+  const [activeRunId, setActiveRunId] = useState('')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [processing, setProcessing] = useState(false)
 
-  const handleFileChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setSelectedFile(file)
-    setPreviewUrl(URL.createObjectURL(file))
+  useEffect(() => {
+    let active = true
+    async function loadCases() {
+      try {
+        const caseRecords = await apiGet('/cases')
+        if (active) {
+          setCases(caseRecords)
+          setCaseId(current => current || caseRecords[0]?.id || '')
+        }
+      } catch (loadError) {
+        if (active) setError(loadError.message)
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    loadCases()
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    async function loadCaseData() {
+      setError('')
+      setImages([])
+      setRuns([])
+      setSelectedFile(null)
+      setExistingImageId('')
+      setActiveRunId('')
+      setResult(null)
+      if (!caseId) return
+
+      try {
+        const [caseImages, caseRuns] = await Promise.all([
+          apiGet(`/images?case_id=${encodeURIComponent(caseId)}`),
+          apiGet(`/cases/${encodeURIComponent(caseId)}/analysis-runs`)
+        ])
+        if (!active) return
+        setImages(caseImages)
+        const savedRuns = caseRuns.filter(run =>
+          run.status === 'completed' &&
+          (run.segments || []).some(segment => segment.label === SEGMENT_LABEL)
+        )
+        setRuns(savedRuns)
+        setActiveRunId(savedRuns[0]?.id || '')
+      } catch (loadError) {
+        if (active) setError(loadError.message)
+      }
+    }
+    loadCaseData()
+    return () => { active = false }
+  }, [caseId])
+
+  useEffect(() => {
+    let active = true
+    const objectUrls = []
+    const selectedRun = runs.find(run => run.id === activeRunId)
+    if (!selectedRun) {
+      return () => { active = false }
+    }
+
+    async function loadResult() {
+      try {
+        const imageRecord = await apiGet(
+          `/images/${encodeURIComponent(selectedRun.image_id)}`
+        )
+        const artifacts = new Set(
+          (selectedRun.artifacts || []).map(artifact => artifact.artifact_type)
+        )
+        const imagesByType = {}
+        for (const artifactType of ARTIFACT_TYPES) {
+          if (!artifacts.has(artifactType)) continue
+          const url = await fetchImageUrl(
+            `/analysis-runs/${encodeURIComponent(selectedRun.id)}/artifacts/${encodeURIComponent(artifactType)}`
+          )
+          objectUrls.push(url)
+          imagesByType[artifactType] = url
+        }
+
+        if (!imagesByType.artery_segmentation_mask ||
+            !imagesByType.artery_segmentation_overlay) {
+          throw new Error('Saved segmentation images are incomplete.')
+        }
+
+        const originalUrl = imageRecord.file_format === 'dcm'
+          ? imagesByType.artery_input_preview
+          : await fetchImageUrl(
+              `/images/${encodeURIComponent(selectedRun.image_id)}/content`
+            )
+        if (originalUrl) objectUrls.push(originalUrl)
+
+        if (active) {
+          setResult({
+            run: selectedRun,
+            images: imagesByType,
+            originalUrl
+          })
+        }
+      } catch (loadError) {
+        objectUrls.forEach(URL.revokeObjectURL)
+        if (active) {
+          setResult(null)
+          setError(loadError.message)
+        }
+      }
+    }
+    loadResult()
+    return () => {
+      active = false
+      objectUrls.forEach(URL.revokeObjectURL)
+    }
+  }, [activeRunId, runs])
+
+  const runSegmentation = async event => {
+    event.preventDefault()
+    if (!caseId || (!selectedFile && !existingImageId)) return
+
+    setError('')
+    setProcessing(true)
     setResult(null)
-    setError('')
-  }
-
-  const clearScan = () => {
-    setSelectedFile(null)
-    setPreviewUrl(null)
-    setResult(null)
-    setError('')
-  }
-
-  const runSegmentation = async (overrideModel = modelType) => {
-    if (!selectedFile) return
-    setLoading(true)
-    setError('')
-
     try {
-      const formData = new FormData()
-      formData.append('file', selectedFile)
-      formData.append('model_type', overrideModel)
+      let imageId = existingImageId
+      if (selectedFile) {
+        const formData = new FormData()
+        formData.append('file', selectedFile)
+        formData.append('case_id', caseId)
+        const uploaded = await apiPost('/images', formData)
+        imageId = uploaded.id
+        setImages(current => current.some(item => item.id === imageId)
+          ? current
+          : [uploaded, ...current])
+        setExistingImageId(imageId)
+        setSelectedFile(null)
+      }
 
-      const res = await fetch(`${API_BASE_URL}/analyze-scan`, {
-        method: 'POST',
-        body: formData
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Segmentation failed')
-
-      setResult(data)
-    } catch (err) {
-      setError(err.message)
+      const prediction = await apiPost(
+        `/images/${encodeURIComponent(imageId)}/segment`,
+        {}
+      )
+      const run = await apiGet(
+        `/analysis-runs/${encodeURIComponent(prediction.analysis_run_id)}`
+      )
+      setRuns(current => [run, ...current.filter(item => item.id !== run.id)])
+      setActiveRunId(run.id)
+      setImages(current => current.some(item => item.id === imageId)
+        ? current
+        : [{ id: imageId, original_filename: selectedFile?.name || imageId }, ...current])
+      setSelectedFile(null)
+      setExistingImageId('')
+    } catch (runError) {
+      setError(runError.message)
     } finally {
-      setLoading(false)
+      setProcessing(false)
     }
   }
 
+  const selectedRun = runs.find(run => run.id === activeRunId)
+  const report = selectedRun?.reports?.[0]
+
   return (
-    <div style={{ color: '#f8fafc' }}>
-      {/* HEADER */}
+    <div className="segmentation-workspace">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">MILESTONE 2 · VESSEL EXTRACTION</span>
-          <h1>Artery Segmentation Workspace</h1>
-          <p>
-            Direct coronary angiogram upload for CLAHE enhancement, binary lumen mask extraction, and centerline skeletonization.
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <select
-            value={modelType}
-            onChange={(e) => {
-              setModelType(e.target.value)
-              if (selectedFile) runSegmentation(e.target.value)
-            }}
-            style={{
-              background: '#0f172a',
-              color: '#38bdf8',
-              border: '1px solid #334155',
-              borderRadius: '10px',
-              padding: '9px 14px',
-              fontSize: '13px',
-              fontWeight: 600
-            }}
-          >
-            <option value="attention">Attention U-Net (v2.0 — scSE)</option>
-            <option value="baseline">Baseline U-Net (v1.0)</option>
-          </select>
+          <span className="eyebrow">BASELINE U-NET · CASE-SCOPED</span>
+          <h1>Artery Segmentation</h1>
+          <p>Run the selected Baseline U-Net checkpoint and review saved mask outputs.</p>
         </div>
       </div>
 
-      {error && (
-        <div style={{ padding: '12px 16px', background: '#450a0a', border: '1px solid #dc2626', borderRadius: '10px', color: '#fca5a5', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px' }}>
-          <Info size={16} /> {error}
+      {error && <div className="login-error" role="alert">{error}</div>}
+
+      <section className="segmentation-control-card">
+        <div className="segmentation-card-heading">
+          <Activity size={19} />
+          <div>
+            <h2>Run artery segmentation</h2>
+            <p>Baseline U-Net · round 2 best checkpoint · threshold 0.50</p>
+          </div>
         </div>
-      )}
+        <form className="segmentation-controls" onSubmit={runSegmentation}>
+          <label>
+            <span>Authorized case</span>
+            <select
+              value={caseId}
+              onChange={event => setCaseId(event.target.value)}
+              disabled={loading || cases.length === 0 || processing}
+              required
+            >
+              <option value="">Select a case</option>
+              {cases.map(item => (
+                <option key={item.id} value={item.id}>
+                  {item.id.slice(0, 8)} · {item.anatomical_region}
+                </option>
+              ))}
+            </select>
+          </label>
 
-      {/* MAIN WORKSPACE GRID */}
-      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: '20px', alignItems: 'start' }}>
-        {/* LEFT: UPLOAD & CONTROLS */}
-        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <span className="eyebrow">INPUT ANGIOGRAM</span>
+          <label>
+            <span>Previously uploaded image (optional)</span>
+            <select
+              value={existingImageId}
+              onChange={event => {
+                setExistingImageId(event.target.value)
+                setSelectedFile(null)
+              }}
+              disabled={!caseId || images.length === 0 || processing}
+            >
+              <option value="">Upload a new image instead</option>
+              {images.map(image => (
+                <option key={image.id} value={image.id}>
+                  {image.original_filename || image.id}
+                </option>
+              ))}
+            </select>
+          </label>
 
-          {!previewUrl ? (
-            <label style={{ border: '1.5px dashed #334155', borderRadius: '12px', padding: '28px 16px', textAlign: 'center', cursor: 'pointer', background: '#0b1120', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
-              <UploadCloud size={30} color="#38bdf8" />
-              <strong style={{ fontSize: '14px' }}>Upload Coronary Scan</strong>
-              <span style={{ fontSize: '12px', color: '#64748b' }}>PNG / JPG from ARCADE or clinical PACS</span>
-              <input type="file" accept="image/*" onChange={handleFileChange} hidden />
-            </label>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ background: '#050912', border: '1px solid #1e293b', borderRadius: '12px', padding: '10px', textAlign: 'center' }}>
-                <img src={previewUrl} alt="Uploaded Scan" style={{ width: '100%', maxHeight: '220px', objectFit: 'contain', borderRadius: '8px' }} />
-              </div>
-
-              <div style={{ background: '#0b1120', border: '1px solid #1e293b', borderRadius: '10px', padding: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
-                  <FileImage size={16} color="#38bdf8" />
-                  <span style={{ fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {selectedFile?.name}
-                  </span>
-                </div>
-                <button type="button" onClick={clearScan} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>
-                  <Trash2 size={15} />
-                </button>
-              </div>
-            </div>
-          )}
+          <label className="segmentation-file-control">
+            <span>Upload image</span>
+            <input
+              type="file"
+              accept=".png,.jpg,.jpeg,.dcm"
+              onChange={event => {
+                setSelectedFile(event.target.files?.[0] || null)
+                if (event.target.files?.[0]) setExistingImageId('')
+              }}
+              disabled={!caseId || processing}
+            />
+          </label>
 
           <button
-            type="button"
-            disabled={!selectedFile || loading}
-            onClick={() => runSegmentation()}
-            className="primary-button"
-            style={{ width: '100%', justifyContent: 'center', opacity: !selectedFile || loading ? 0.6 : 1 }}
+            className="overview-primary-btn"
+            type="submit"
+            disabled={!caseId || processing || (!selectedFile && !existingImageId)}
           >
-            <Sparkles size={16} />
-            {loading ? 'Extracting Vessel Mask...' : 'Run Artery Segmentation'}
+            {processing
+              ? <><LoaderCircle size={16} className="segmentation-spinner" /> Running model…</>
+              : <><UploadCloud size={16} /> Upload and segment</>}
           </button>
+        </form>
+        {!loading && cases.length === 0 && (
+          <p className="segmentation-empty">Create a patient and case before uploading an image.</p>
+        )}
+      </section>
 
-          {result && (
-            <div style={{ background: '#0b1120', border: '1px solid #1e293b', borderRadius: '12px', padding: '14px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#34d399', fontSize: '12px', fontWeight: 700 }}>
-                <CheckCircle2 size={15} /> Segmented in {result.inference_time_ms} ms
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px' }}>
-                <div style={{ background: '#0f172a', padding: '8px', borderRadius: '8px' }}>
-                  <span style={{ color: '#94a3b8', display: 'block', fontSize: '11px' }}>Centerline Length</span>
-                  <strong style={{ fontFamily: 'JetBrains Mono, monospace' }}>{result.vessel_structure.vessel_length_px} px</strong>
-                </div>
-                <div style={{ background: '#0f172a', padding: '8px', borderRadius: '8px' }}>
-                  <span style={{ color: '#94a3b8', display: 'block', fontSize: '11px' }}>Bifurcations</span>
-                  <strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#10b981' }}>{result.vessel_structure.branching_points}</strong>
-                </div>
-                <div style={{ background: '#0f172a', padding: '8px', borderRadius: '8px' }}>
-                  <span style={{ color: '#94a3b8', display: 'block', fontSize: '11px' }}>Tortuosity Index</span>
-                  <strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#f59e0b' }}>{result.vessel_structure.tortuosity_index}</strong>
-                </div>
-                <div style={{ background: '#0f172a', padding: '8px', borderRadius: '8px' }}>
-                  <span style={{ color: '#94a3b8', display: 'block', fontSize: '11px' }}>Reference Caliber</span>
-                  <strong style={{ fontFamily: 'JetBrains Mono, monospace', color: '#38bdf8' }}>{result.stenosis.reference_diameter_px} px</strong>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* RIGHT: 4-PANEL SEGMENTATION OUTPUT */}
-        <div style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: '16px', padding: '20px', minHeight: '480px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Layers size={18} color="#38bdf8" />
-              <h2 style={{ margin: 0, fontSize: '17px' }}>Segmentation & Skeletonization Outputs</h2>
-            </div>
-            {result && (
-              <span style={{ fontSize: '12px', color: '#38bdf8', fontFamily: 'JetBrains Mono, monospace' }}>
-                {result.model_used}
-              </span>
-            )}
+      <section className="segmentation-results-card">
+        <div className="segmentation-results-heading">
+          <div>
+            <h2>Saved segmentation results</h2>
+            <p>Choose an earlier Baseline U-Net run for this case.</p>
           </div>
-
-          {!result ? (
-            <div style={{ height: '390px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#050912', borderRadius: '12px', border: '1px dashed #1e293b', color: '#64748b' }}>
-              <Activity size={44} style={{ opacity: 0.4, marginBottom: '10px' }} />
-              <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px' }}>No Segmentation Output Yet</p>
-              <span style={{ fontSize: '12px', marginTop: '4px' }}>Upload an angiogram on the left and click "Run Artery Segmentation"</span>
-            </div>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px' }}>
-              {[
-                { title: '1. Original Input Scan', img: result.images.original, tag: '512×512 Raw' },
-                { title: '2. CLAHE + Bilateral Denoised', img: result.images.preprocessed, tag: 'Normalized Contrast' },
-                { title: '3. Binary Artery Mask', img: result.images.segmentation_mask, tag: 'Lumen Segmentation' },
-                { title: '4. Extracted Vessel Centerline', img: result.images.centerline, tag: '1px Topological Skeleton' }
-              ].map((panel) => (
-                <div key={panel.title} style={{ background: '#050912', border: '1px solid #1e293b', borderRadius: '12px', padding: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '12.5px', fontWeight: 600, color: '#e2e8f0' }}>{panel.title}</span>
-                    <span style={{ fontSize: '10.5px', color: '#38bdf8', background: 'rgba(56,189,248,0.1)', padding: '2px 8px', borderRadius: '999px' }}>{panel.tag}</span>
-                  </div>
-                  <img
-                    src={panel.img}
-                    alt={panel.title}
-                    style={{ width: '100%', maxHeight: '240px', objectFit: 'contain', borderRadius: '8px', background: '#000' }}
-                  />
-                </div>
+          <label>
+            <span className="visually-hidden">Saved segmentation run</span>
+            <select
+              value={activeRunId}
+              onChange={event => setActiveRunId(event.target.value)}
+              disabled={runs.length === 0}
+            >
+              {runs.length === 0 && <option value="">No saved runs</option>}
+              {runs.map(run => (
+                <option key={run.id} value={run.id}>
+                  {run.started_at
+                    ? new Date(run.started_at).toLocaleString()
+                    : run.id.slice(0, 8)}
+                </option>
               ))}
-            </div>
-          )}
+            </select>
+          </label>
         </div>
-      </div>
+
+        {result ? (
+          <>
+            <div className="segmentation-metadata">
+              <span>Model: Baseline U-Net · round2-best</span>
+              <span>Threshold: 0.50</span>
+              {report?.summary && <span>{report.summary}</span>}
+            </div>
+            <div className="segmentation-image-grid">
+              <figure>
+                <figcaption>Original image</figcaption>
+                {result.originalUrl
+                  ? <img src={result.originalUrl} alt="Original uploaded angiogram" />
+                  : <div className="segmentation-image-missing">Original preview unavailable</div>}
+              </figure>
+              <figure>
+                <figcaption>Predicted artery mask</figcaption>
+                <img
+                  src={result.images.artery_segmentation_mask}
+                  alt="Baseline U-Net binary artery segmentation mask"
+                />
+              </figure>
+              <figure>
+                <figcaption>Segmentation overlay</figcaption>
+                <img
+                  src={result.images.artery_segmentation_overlay}
+                  alt="Artery segmentation overlay on the input image"
+                />
+              </figure>
+              <figure>
+                <figcaption>Probability map</figcaption>
+                {result.images.artery_probability_map
+                  ? <img src={result.images.artery_probability_map} alt="Baseline U-Net pixel probability map" />
+                  : <div className="segmentation-image-missing">Probability map unavailable</div>}
+              </figure>
+            </div>
+          </>
+        ) : (
+          <div className="segmentation-no-results">
+            <ImageIcon size={28} />
+            <p>{runs.length ? 'Select a saved result to view its images.' : 'No saved Baseline U-Net results for this case yet.'}</p>
+          </div>
+        )}
+      </section>
+      <p className="segmentation-disclaimer">
+        Model outputs are research results, not a clinical diagnosis. Dice and other
+        ground-truth metrics are not calculated for individual uploads.
+      </p>
     </div>
   )
 }

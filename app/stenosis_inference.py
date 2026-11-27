@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage
 
 from stenosis_detection.model_multiscale import MultiScaleResidualUNet
@@ -23,15 +23,20 @@ PREDICTION_DIR.mkdir(parents=True, exist_ok=True)
 
 THRESHOLD = 0.90
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_MODELS = {}
 
 
-def load_stenosis_model():
+def load_stenosis_model(device=None):
     """Load the selected trained stenosis segmentation model."""
 
     if not CHECKPOINT_PATH.exists():
         raise FileNotFoundError(
             f"Model checkpoint not found: {CHECKPOINT_PATH}"
         )
+
+    target_device = torch.device(device or DEVICE)
+    if str(target_device) in _MODELS:
+        return _MODELS[str(target_device)]
 
     model = MultiScaleResidualUNet(
         in_channels=1,
@@ -40,29 +45,28 @@ def load_stenosis_model():
 
     checkpoint = torch.load(
         CHECKPOINT_PATH,
-        map_location=DEVICE,
+        map_location=target_device,
         weights_only=False
     )
+
+    if not isinstance(checkpoint, dict) or not isinstance(
+        checkpoint.get("model_state_dict"), dict
+    ):
+        raise ValueError("Checkpoint does not contain model_state_dict")
 
     model.load_state_dict(
         checkpoint["model_state_dict"],
         strict=True
     )
 
-    model.to(DEVICE)
+    model.to(target_device)
     model.eval()
 
-    print("FrozenFineTuned stenosis model loaded.")
-    print(f"Device: {DEVICE}")
-    print(f"Threshold: {THRESHOLD}")
-
+    _MODELS[str(target_device)] = model
     return model
 
 
-stenosis_model = load_stenosis_model()
-
-
-def predict_stenosis(image_id: str) -> dict:
+def predict_stenosis(image_id: str, device=None) -> dict:
     """Predict stenosis regions and return their locations."""
 
     array_path = (
@@ -92,12 +96,14 @@ def predict_stenosis(image_id: str) -> dict:
     if image_array.min() < 0 or image_array.max() > 1:
         raise ValueError("Image values must be normalized between 0 and 1.")
 
+    target_device = torch.device(device or DEVICE)
+    model = load_stenosis_model(target_device)
     input_tensor = torch.from_numpy(
         image_array.copy()
-    ).unsqueeze(0).unsqueeze(0).to(DEVICE)
+    ).unsqueeze(0).unsqueeze(0).to(target_device)
 
     with torch.inference_mode():
-        logits = stenosis_model(input_tensor)
+        logits = model(input_tensor)
         probabilities = torch.sigmoid(logits)
 
     probability_map = probabilities[0, 0].cpu().numpy()
@@ -157,6 +163,25 @@ def predict_stenosis(image_id: str) -> dict:
 
     Image.fromarray(mask_pixels).save(mask_path)
 
+    overlay = Image.fromarray(
+        np.round(np.clip(image_array, 0, 1) * 255).astype(np.uint8)
+    ).convert("RGB")
+    draw = ImageDraw.Draw(overlay)
+    for region in regions:
+        box = region["bounding_box"]
+        draw.rectangle(
+            (
+                box["x_min"],
+                box["y_min"],
+                box["x_max"],
+                box["y_max"],
+            ),
+            outline=(255, 40, 40),
+            width=2,
+        )
+    overlay_path = PREDICTION_DIR / f"{image_id}_stenosis_overlay.png"
+    overlay.save(overlay_path)
+
     # Save probability visualization.
     probability_pixels = np.round(
         np.clip(probability_map, 0, 1) * 255
@@ -166,10 +191,7 @@ def predict_stenosis(image_id: str) -> dict:
         PREDICTION_DIR / f"{image_id}_probability.png"
     )
 
-    # Reuse an existing probability image to avoid the
-    # Windows file-overwrite issue encountered previously.
-    if not probability_path.exists():
-        Image.fromarray(probability_pixels).save(probability_path)
+    Image.fromarray(probability_pixels).save(probability_path)
 
     return {
         "image_id": image_id,
@@ -185,6 +207,9 @@ def predict_stenosis(image_id: str) -> dict:
         ),
         "probability_map_path": str(
             probability_path.relative_to(BASE_DIR)
+        ),
+        "localization_overlay_path": str(
+            overlay_path.relative_to(BASE_DIR)
         ),
         "note": (
             "Predicted segmentation regions are research outputs "

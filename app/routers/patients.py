@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.permissions import check_patient_access
 from app.database import get_db
 from app.models import Patient, User
 from app.routers.auth import get_current_user
-from app.schemas import PatientCreate, PatientResponse
+from app.schemas import PatientCreate, PatientResponse, PatientUpdate
 
 router = APIRouter(prefix="/patients", tags=["Patient Management"])
 
@@ -34,14 +35,21 @@ def create_patient(
     db.add(patient)
 
     try:
-        db.commit()
+        db.flush()
         db.refresh(patient)
-    except IntegrityError:
+        db.commit()
+    except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Patient code already exists",
-        )
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not create patient",
+        ) from exc
 
     return patient
 
@@ -75,13 +83,63 @@ def get_patient(
             detail="Patient not found",
         )
 
-    if (
-        current_user.role != "administrator"
-        and patient.created_by != current_user.id
-    ):
+    check_patient_access(patient, current_user)
+
+    return patient
+
+
+@router.patch(
+    "/{patient_id}",
+    response_model=PatientResponse,
+)
+def update_patient(
+    patient_id: str,
+    data: PatientUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    patient = db.get(Patient, patient_id)
+
+    if patient is None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You cannot access this patient record",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Patient not found",
         )
+
+    check_patient_access(patient, current_user)
+    changes = data.model_dump(exclude_unset=True)
+
+    if not changes:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="At least one patient field must be provided",
+        )
+
+    for field in ("patient_code", "age", "gender"):
+        if field in changes and changes[field] is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field} cannot be null",
+            )
+
+    for field, value in changes.items():
+        setattr(patient, field, value)
+
+    try:
+        db.flush()
+        db.refresh(patient)
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Patient code already exists",
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not update patient",
+        ) from exc
 
     return patient

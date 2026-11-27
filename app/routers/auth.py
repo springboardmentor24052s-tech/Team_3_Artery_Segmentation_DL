@@ -3,6 +3,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.security import (
@@ -16,7 +17,7 @@ from app.models import User
 from app.schemas import TokenResponse, UserLogin, UserRegister
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
-bearer_scheme = HTTPBearer()
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def public_user(user: User) -> dict:
@@ -57,14 +58,21 @@ def register(
     db.add(user)
 
     try:
-        db.commit()
+        db.flush()
         db.refresh(user)
-    except Exception:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Email is already registered",
+        ) from exc
+    except SQLAlchemyError as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Could not register user",
-        )
+        ) from exc
 
     return public_user(user)
 
@@ -106,12 +114,19 @@ def login(
 
 
 def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     try:
         payload = decode_access_token(credentials.credentials)
-        user_id = payload.get("sub")
+        user_id = payload.get("sub") if isinstance(payload, dict) else None
 
         if not user_id:
             raise HTTPException(
@@ -124,7 +139,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
 
     user = db.get(User, user_id)
 

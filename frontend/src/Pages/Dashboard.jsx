@@ -1,26 +1,81 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Activity, ArrowRight, BellRing, CheckCircle2,
   Clock3, FilePlus2, Layers, ShieldCheck, Users
 } from 'lucide-react'
+import { apiGet } from '../Services/api'
 
-const STORAGE_KEY = 'vascular_case_analyses_v1'
+function isStenosisRun(run) {
+  return run.status === 'completed' &&
+    (run.artifacts || []).some(
+      artifact => artifact.artifact_type === 'stenosis_mask'
+    )
+}
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  const [cases, setCases] = useState([])
+  const [analyses, setAnalyses] = useState({})
+  const [error, setError] = useState('')
 
-  const { cases, analyses } = useMemo(() => {
-    try {
-      const savedCases = JSON.parse(localStorage.getItem('cases') || '[]')
-      const savedAnalyses = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
-      return {
-        cases: Array.isArray(savedCases) ? savedCases : [],
-        analyses: savedAnalyses && typeof savedAnalyses === 'object' ? savedAnalyses : {}
+  useEffect(() => {
+    let active = true
+    async function loadDashboard() {
+      try {
+        const [patients, caseRecords] = await Promise.all([
+          apiGet('/patients'),
+          apiGet('/cases')
+        ])
+        const patientById = new Map(patients.map(patient => [patient.id, patient]))
+        const analysisByCase = {}
+        const caseRows = await Promise.all(caseRecords.map(async record => {
+          const patient = patientById.get(record.patient_id)
+          const runs = await apiGet(`/cases/${encodeURIComponent(record.id)}/analysis-runs`)
+          const latest = runs.find(isStenosisRun)
+          if (latest) {
+            const findings = latest.stenosis_findings || []
+            const measured = findings.filter(finding => finding.stenosis_percentage != null)
+            const worst = measured.reduce(
+              (current, finding) => Number(finding.stenosis_percentage) > Number(current?.stenosis_percentage)
+                ? finding
+                : current,
+              null
+            )
+            const mostSevere = measured.reduce((current, finding) => {
+              const rank = { Mild: 1, Moderate: 2, Severe: 3 }
+              return (rank[finding.severity] || 0) > (rank[current] || 0)
+                ? finding.severity
+                : current
+            }, 'Unavailable')
+            analysisByCase[record.id] = {
+              analysis: {
+                stenosis: {
+                  narrowing_percentage: worst?.stenosis_percentage ?? null,
+                  severity: mostSevere
+                }
+              }
+            }
+          }
+          return {
+            caseId: record.id,
+            patientId: patient?.patient_code || 'Patient unavailable',
+            age: patient?.age,
+            gender: patient?.gender,
+            riskFactors: patient?.risk_factors,
+            status: record.analysis_status === 'completed' ? 'Completed' : 'Pending'
+          }
+        }))
+        if (active) {
+          setCases(caseRows)
+          setAnalyses(analysisByCase)
+        }
+      } catch (loadError) {
+        if (active) setError(loadError.message)
       }
-    } catch {
-      return { cases: [], analyses: {} }
     }
+    loadDashboard()
+    return () => { active = false }
   }, [])
 
   const stats = useMemo(() => {
@@ -45,7 +100,7 @@ export default function Dashboard() {
         <div>
           <span className="overview-eyebrow">CLINICAL COMMAND CENTER</span>
           <h1>VascularAI Diagnostic Overview</h1>
-          <p>Real-time coronary artery segmentation, stenosis grading, and Grad-CAM++ explainability telemetry.</p>
+          <p>Patient cases and stenosis analysis summaries from saved backend records.</p>
         </div>
 
         <button
@@ -63,15 +118,17 @@ export default function Dashboard() {
         <div>
           <div className="overview-live">
             <span />
-            AI INFERENCE ENGINE ONLINE · ATTENTION U-NET (v2.0)
+            STENOSIS DETECTION MODEL · RESEARCH OUTPUT
           </div>
-          <h2>Automated Coronary Stenosis & Morphometry Workstation</h2>
+          <h2>Case-scoped stenosis analysis</h2>
           <p>
-            Select any patient record to run bilateral CLAHE preprocessing, Frangi + morphological vessel extraction, centerline tortuosity mapping, and Grad-CAM++ saliency verification.
+            Upload an angiogram within a case to run the available stenosis model.             Baseline U-Net artery segmentation is available as a separate analysis workflow.
           </p>
         </div>
         <Activity size={54} className="overview-welcome-icon" />
       </div>
+
+      {error && <div className="login-error" role="alert">{error}</div>}
 
       {/* LIVE METRIC CARDS */}
       <div className="overview-stat-grid">
@@ -90,7 +147,7 @@ export default function Dashboard() {
           </div>
           <span className="overview-stat-value" style={{ color: '#34d399' }}>{stats.analyzedCount}</span>
           <h3>AI Scans Completed</h3>
-          <p>Saved with full 6-stage telemetry</p>
+          <p>Saved analysis runs</p>
         </div>
 
         <div className="overview-stat-card">
@@ -99,7 +156,7 @@ export default function Dashboard() {
           </div>
           <span className="overview-stat-value" style={{ color: '#f87171' }}>{stats.criticalCount}</span>
           <h3>High / Critical Alerts</h3>
-          <p>Stenosis ≥ 70% requiring review</p>
+          <p>Measured severe regions; review required</p>
         </div>
 
         <div className="overview-stat-card">
@@ -182,19 +239,19 @@ export default function Dashboard() {
           {[
             {
               title: '1. Patient Case & XAI Studio',
-              desc: 'Upload ARCADE scans, inspect 6-stage pipeline, and export JSON/CSV/PDF reports.',
+              desc: 'Create cases, upload images, and inspect persisted stenosis results.',
               path: '/cases',
               tag: 'Milestone 1–3'
             },
             {
               title: '2. Artery Segmentation Studio',
-              desc: 'CLAHE contrast normalization, binary lumen extraction & centerline skeleton.',
+              desc: 'Baseline U-Net artery segmentation is available in its separate workflow; centerlines are unavailable.',
               path: '/segmentation',
               tag: 'Milestone 2'
             },
             {
-              title: '3. Dual-Model Stenosis & Grad-CAM++',
-              desc: 'Compare Baseline U-Net vs Attention U-Net narrowing % and saliency heatmaps.',
+              title: '3. Stenosis Detection',
+              desc: 'Run the available stenosis model independently and review experimental measurements.',
               path: '/stenosis',
               tag: 'Milestone 3'
             },

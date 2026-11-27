@@ -33,7 +33,7 @@ export default function AppLayout() {
 
   const handleLogout = () => {
     localStorage.removeItem('access_token')
-    localStorage.removeItem('demoUser')
+    localStorage.removeItem('current_user')
     closeMobileMenu()
     navigate('/login', { replace: true })
   }

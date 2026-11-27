@@ -10,6 +10,7 @@ import {
   Mail,
   ShieldCheck
 } from 'lucide-react'
+import { apiGet, apiPost } from '../Services/api'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -23,8 +24,9 @@ export default function Login() {
     Boolean(localStorage.getItem('remember_email'))
   )
   const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault()
     setError('')
 
@@ -39,23 +41,28 @@ export default function Login() {
       return
     }
 
-    // Remember email if selected
+    setLoading(true)
     if (rememberMe) {
       localStorage.setItem('remember_email', email.trim())
     } else {
       localStorage.removeItem('remember_email')
     }
 
-    // Temporary frontend-only demo authentication
-    localStorage.setItem(
-      'demoUser',
-      JSON.stringify({
-        email: email.trim()
+    try {
+      const result = await apiPost('/auth/login', {
+        email: email.trim(),
+        password
       })
-    )
-
-    // Navigate to dashboard
-    navigate('/dashboard', { replace: true })
+      localStorage.setItem('access_token', result.access_token)
+      const user = await apiGet('/auth/me')
+      localStorage.setItem('current_user', JSON.stringify(user))
+      navigate('/overview', { replace: true })
+    } catch (loginError) {
+      localStorage.removeItem('access_token')
+      setError(loginError.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -180,8 +187,9 @@ export default function Login() {
           <button
             type="submit"
             className="login-submit"
+            disabled={loading}
           >
-            Sign in
+            {loading ? 'Signing in…' : 'Sign in'}
             <ArrowRight size={18} />
           </button>
 
